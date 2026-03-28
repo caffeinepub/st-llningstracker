@@ -1,0 +1,731 @@
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Link } from "@tanstack/react-router";
+import {
+  CheckCircle,
+  Clock,
+  History,
+  Loader2,
+  Package,
+  Plus,
+  Settings,
+  Truck,
+  X,
+} from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
+import { Variant_created_loadoutSet_statusChanged_checkedOut_returned } from "../backend";
+import { TrailerStatus } from "../backend";
+import { loadConfig } from "../config";
+import {
+  useAllActivityLogs,
+  useCheckoutPhotos,
+  useCreatePartType,
+  useCreateTrailer,
+  useIsAdmin,
+  useListPartTypes,
+  useListTrailers,
+  useLoadout,
+  useReturnPhotos,
+  useSetLoadout,
+  useUpdateTrailer,
+} from "../hooks/useQueries";
+import type { ActivityLogEntry, Trailer } from "../hooks/useQueries";
+
+// --- Photo URL hook ---
+function usePhotoUrl(hash: string): string | null {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    loadConfig().then((config) => {
+      if (!cancelled && hash) {
+        setUrl(
+          `${config.storage_gateway_url}/v1/blob/?blob_hash=${encodeURIComponent(hash)}&owner_id=${encodeURIComponent(config.backend_canister_id)}&project_id=${encodeURIComponent(config.project_id)}`,
+        );
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [hash]);
+  return url;
+}
+
+// --- PhotoThumb: single thumbnail ---
+function PhotoThumb({ hash, onClick }: { hash: string; onClick: () => void }) {
+  const url = usePhotoUrl(hash);
+  if (!url)
+    return <div className="w-16 h-16 bg-muted rounded-lg animate-pulse" />;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="w-16 h-16 rounded-lg overflow-hidden border border-border flex-shrink-0 hover:opacity-80 transition-opacity"
+    >
+      <img src={url} alt="Foto" className="w-full h-full object-cover" />
+    </button>
+  );
+}
+
+// --- PhotoLightbox ---
+function PhotoLightbox({
+  hash,
+  onClose,
+}: { hash: string; onClose: () => void }) {
+  const url = usePhotoUrl(hash);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    dialogRef.current?.showModal();
+  }, []);
+
+  return (
+    <dialog
+      ref={dialogRef}
+      data-ocid="history.photo.modal"
+      className="fixed inset-0 z-50 bg-transparent p-0 m-0 max-w-none max-h-none w-full h-full flex items-center justify-center backdrop:bg-black/80"
+      onClose={onClose}
+      onClick={onClose}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") onClose();
+      }}
+    >
+      <button
+        type="button"
+        onClick={onClose}
+        className="absolute top-4 right-4 text-white z-10"
+        data-ocid="history.photo.close_button"
+      >
+        <X className="w-7 h-7" />
+      </button>
+      {url ? (
+        <img
+          src={url}
+          alt="Foto stor"
+          className="max-h-[85vh] max-w-full rounded-xl object-contain"
+        />
+      ) : (
+        <div className="w-16 h-16 bg-muted rounded-xl animate-pulse" />
+      )}
+    </dialog>
+  );
+}
+
+// --- PhotoGrid: renders clickable thumbnails ---
+function PhotoGrid({ hashes }: { hashes: string[] }) {
+  const [open, setOpen] = useState<string | null>(null);
+
+  if (!hashes || hashes.length === 0) return null;
+
+  return (
+    <>
+      <div className="flex flex-wrap gap-2 mt-2">
+        {hashes.map((h) => (
+          <PhotoThumb key={h} hash={h} onClick={() => setOpen(h)} />
+        ))}
+      </div>
+      {open && <PhotoLightbox hash={open} onClose={() => setOpen(null)} />}
+    </>
+  );
+}
+
+// --- Action label ---
+function actionLabel(
+  action: Variant_created_loadoutSet_statusChanged_checkedOut_returned,
+): string {
+  switch (action) {
+    case Variant_created_loadoutSet_statusChanged_checkedOut_returned.checkedOut:
+      return "Utcheckad";
+    case Variant_created_loadoutSet_statusChanged_checkedOut_returned.returned:
+      return "Inlämnad";
+    case Variant_created_loadoutSet_statusChanged_checkedOut_returned.created:
+      return "Skapad";
+    case Variant_created_loadoutSet_statusChanged_checkedOut_returned.loadoutSet:
+      return "Lastlista uppdaterad";
+    case Variant_created_loadoutSet_statusChanged_checkedOut_returned.statusChanged:
+      return "Status ändrad";
+    default:
+      return "Okänd";
+  }
+}
+
+function actionColor(
+  action: Variant_created_loadoutSet_statusChanged_checkedOut_returned,
+): string {
+  switch (action) {
+    case Variant_created_loadoutSet_statusChanged_checkedOut_returned.checkedOut:
+      return "bg-orange-100 text-orange-700";
+    case Variant_created_loadoutSet_statusChanged_checkedOut_returned.returned:
+      return "bg-green-100 text-green-700";
+    case Variant_created_loadoutSet_statusChanged_checkedOut_returned.created:
+      return "bg-blue-100 text-blue-700";
+    default:
+      return "bg-muted text-muted-foreground";
+  }
+}
+
+function statusLabel(status: TrailerStatus): string {
+  switch (status) {
+    case TrailerStatus.available:
+      return "Tillgänglig";
+    case TrailerStatus.out:
+      return "Ute";
+    case TrailerStatus.returned:
+      return "Återlämnad";
+    case TrailerStatus.incomplete:
+      return "Ofullständig";
+  }
+}
+
+// --- TrailerHistoryRow ---
+function TrailerHistoryRow({
+  entry,
+  trailers,
+  idx,
+}: {
+  entry: ActivityLogEntry;
+  trailers: Trailer[];
+  idx: number;
+}) {
+  const isCheckout =
+    entry.action ===
+    Variant_created_loadoutSet_statusChanged_checkedOut_returned.checkedOut;
+  const isReturn =
+    entry.action ===
+    Variant_created_loadoutSet_statusChanged_checkedOut_returned.returned;
+
+  const trailer = trailers.find((t) => t.id === entry.trailerId);
+
+  const { data: checkoutPhotos } = useCheckoutPhotos(
+    isCheckout ? entry.trailerId : undefined,
+  );
+  const { data: returnPhotos } = useReturnPhotos(
+    isReturn ? entry.trailerId : undefined,
+  );
+
+  const photos = isCheckout
+    ? (checkoutPhotos ?? [])
+    : isReturn
+      ? (returnPhotos ?? [])
+      : [];
+
+  const dateStr = new Date(Number(entry.timestamp / 1_000_000n)).toLocaleString(
+    "sv-SE",
+    {
+      dateStyle: "short",
+      timeStyle: "short",
+    },
+  );
+
+  return (
+    <div
+      data-ocid={`history.item.${idx}`}
+      className="border border-border rounded-xl p-3 bg-white"
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-bold text-sm">
+              {trailer
+                ? trailer.code
+                : `Trailer #${entry.trailerId.toString()}`}
+            </span>
+            {trailer && (
+              <span className="text-xs text-muted-foreground truncate">
+                {trailer.name}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2 mt-1 flex-wrap">
+            <span
+              className={`text-xs font-semibold px-2 py-0.5 rounded-full ${actionColor(entry.action)}`}
+            >
+              {actionLabel(entry.action)}
+            </span>
+            <span className="text-xs text-muted-foreground flex items-center gap-1">
+              <Clock className="w-3 h-3" />
+              {dateStr}
+            </span>
+          </div>
+          {entry.details && (
+            <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
+              {entry.details}
+            </p>
+          )}
+        </div>
+      </div>
+      {photos.length > 0 && <PhotoGrid hashes={photos} />}
+    </div>
+  );
+}
+
+// --- HistorySection ---
+function HistorySection({ trailers }: { trailers: Trailer[] }) {
+  const { data: logs, isLoading } = useAllActivityLogs();
+
+  return (
+    <div className="bg-white rounded-xl shadow-card p-5">
+      <h2 className="font-semibold text-lg flex items-center gap-2 mb-4">
+        <History className="w-5 h-5" />
+        Historik &amp; Bilder
+      </h2>
+      {isLoading ? (
+        <div className="space-y-3" data-ocid="history.loading_state">
+          {[1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-20 rounded-xl" />
+          ))}
+        </div>
+      ) : logs && logs.length > 0 ? (
+        <div className="space-y-3">
+          {logs.map((entry, i) => (
+            <TrailerHistoryRow
+              key={`${entry.trailerId.toString()}-${entry.timestamp.toString()}-${i}`}
+              entry={entry}
+              trailers={trailers}
+              idx={i + 1}
+            />
+          ))}
+        </div>
+      ) : (
+        <p
+          data-ocid="history.empty_state"
+          className="text-sm text-muted-foreground"
+        >
+          Ingen historik ännu
+        </p>
+      )}
+    </div>
+  );
+}
+
+// --- Existing form components ---
+
+function CreateTrailerForm() {
+  const [code, setCode] = useState("");
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const { mutateAsync, isPending } = useCreateTrailer();
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!code.trim() || !name.trim()) return;
+    try {
+      await mutateAsync({
+        code: code.trim(),
+        name: name.trim(),
+        description: description.trim(),
+      });
+      setCode("");
+      setName("");
+      setDescription("");
+      toast.success("Trailer skapad!");
+    } catch {
+      toast.error("Kunde inte skapa trailer.");
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-3">
+      <div>
+        <Label htmlFor="t-code">Trailer-kod</Label>
+        <Input
+          data-ocid="admin.trailer.code.input"
+          id="t-code"
+          value={code}
+          onChange={(e) => setCode(e.target.value)}
+          placeholder="T.ex. T-001"
+          className="mt-1 h-12"
+          required
+        />
+      </div>
+      <div>
+        <Label htmlFor="t-name">Namn</Label>
+        <Input
+          data-ocid="admin.trailer.name.input"
+          id="t-name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="T.ex. Ställningstrailer 01"
+          className="mt-1 h-12"
+          required
+        />
+      </div>
+      <div>
+        <Label htmlFor="t-desc">Beskrivning (valfritt)</Label>
+        <Input
+          data-ocid="admin.trailer.description.input"
+          id="t-desc"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder="T.ex. Liten trailer, 2-axlad"
+          className="mt-1 h-12"
+        />
+      </div>
+      <Button
+        data-ocid="admin.trailer.submit_button"
+        type="submit"
+        disabled={isPending || !code.trim() || !name.trim()}
+        className="w-full h-12 bg-primary text-primary-foreground hover:bg-primary/90 font-semibold gap-2"
+      >
+        {isPending ? (
+          <Loader2 className="w-4 h-4 animate-spin" />
+        ) : (
+          <Plus className="w-4 h-4" />
+        )}
+        Skapa trailer
+      </Button>
+    </form>
+  );
+}
+
+function CreatePartTypeForm() {
+  const [name, setName] = useState("");
+  const [unitLabel, setUnitLabel] = useState("");
+  const { mutateAsync, isPending } = useCreatePartType();
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim() || !unitLabel.trim()) return;
+    try {
+      await mutateAsync({ name: name.trim(), unitLabel: unitLabel.trim() });
+      setName("");
+      setUnitLabel("");
+      toast.success("Deltyp skapad!");
+    } catch {
+      toast.error("Kunde inte skapa deltyp.");
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-3">
+      <div>
+        <Label htmlFor="pt-name">Namn på deltyp</Label>
+        <Input
+          data-ocid="admin.parttype.name.input"
+          id="pt-name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="T.ex. Ram, Plank, Diagonalstag"
+          className="mt-1 h-12"
+          required
+        />
+      </div>
+      <div>
+        <Label htmlFor="pt-unit">Enhet</Label>
+        <Input
+          data-ocid="admin.parttype.unit.input"
+          id="pt-unit"
+          value={unitLabel}
+          onChange={(e) => setUnitLabel(e.target.value)}
+          placeholder="T.ex. st, par"
+          className="mt-1 h-12"
+          required
+        />
+      </div>
+      <Button
+        data-ocid="admin.parttype.submit_button"
+        type="submit"
+        disabled={isPending || !name.trim() || !unitLabel.trim()}
+        className="w-full h-12 bg-secondary text-secondary-foreground hover:bg-secondary/90 font-semibold gap-2"
+      >
+        {isPending ? (
+          <Loader2 className="w-4 h-4 animate-spin" />
+        ) : (
+          <Plus className="w-4 h-4" />
+        )}
+        Skapa deltyp
+      </Button>
+    </form>
+  );
+}
+
+function LoadoutEditor({
+  trailerId,
+  trailerCode,
+}: { trailerId: bigint; trailerCode: string }) {
+  const { data: partTypes } = useListPartTypes();
+  const { data: currentLoadout } = useLoadout(trailerId);
+  const { mutateAsync: setLoadout, isPending } = useSetLoadout();
+  const [quantities, setQuantities] = useState<Record<string, string>>({});
+  const [open, setOpen] = useState(false);
+
+  const getQty = (ptId: bigint) => {
+    const key = ptId.toString();
+    if (quantities[key] !== undefined) return quantities[key];
+    const existing = currentLoadout?.find((i) => i.partTypeId === ptId);
+    return existing ? existing.quantity.toString() : "";
+  };
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const items = (partTypes ?? []).flatMap((pt) => {
+      const qty = Number.parseInt(getQty(pt.id), 10);
+      if (!qty || qty <= 0) return [];
+      return [{ partTypeId: pt.id, quantity: BigInt(qty) }];
+    });
+    try {
+      await setLoadout({ trailerId, items });
+      toast.success("Lastlista sparad!");
+      setOpen(false);
+    } catch {
+      toast.error("Kunde inte spara lastlista.");
+    }
+  };
+
+  if (!open) {
+    return (
+      <Button
+        data-ocid="admin.loadout.edit.button"
+        variant="ghost"
+        size="sm"
+        className="h-8 text-xs"
+        onClick={() => setOpen(true)}
+      >
+        Redigera lastlista
+      </Button>
+    );
+  }
+
+  return (
+    <form
+      onSubmit={handleSave}
+      className="mt-2 space-y-2 border-t border-border pt-3"
+    >
+      <p className="text-xs font-semibold text-muted-foreground mb-2">
+        Lastlista för {trailerCode}
+      </p>
+      {(partTypes ?? []).map((pt, i) => (
+        <div key={pt.id.toString()} className="flex items-center gap-2">
+          <span className="flex-1 text-sm">{pt.name}</span>
+          <Input
+            data-ocid={`admin.loadout.qty.input.${i + 1}`}
+            type="number"
+            min="0"
+            value={getQty(pt.id)}
+            onChange={(e) =>
+              setQuantities((prev) => ({
+                ...prev,
+                [pt.id.toString()]: e.target.value,
+              }))
+            }
+            placeholder="0"
+            className="w-20 h-8 text-center text-sm"
+          />
+          <span className="text-xs text-muted-foreground w-6">
+            {pt.unitLabel}
+          </span>
+        </div>
+      ))}
+      <div className="flex gap-2 pt-1">
+        <Button
+          data-ocid="admin.loadout.save.button"
+          type="submit"
+          size="sm"
+          disabled={isPending}
+          className="bg-primary text-primary-foreground hover:bg-primary/90"
+        >
+          {isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : null}
+          Spara
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={() => setOpen(false)}
+        >
+          Avbryt
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+function SetAvailableButton({ trailer }: { trailer: Trailer }) {
+  const { mutateAsync, isPending } = useUpdateTrailer();
+
+  if (trailer.status === TrailerStatus.available) return null;
+
+  const handleClick = async () => {
+    try {
+      await mutateAsync({
+        id: trailer.id,
+        name: trailer.name,
+        description: trailer.description,
+        status: TrailerStatus.available,
+      });
+      toast.success(`${trailer.code} är nu tillgänglig`);
+    } catch {
+      toast.error("Kunde inte uppdatera status.");
+    }
+  };
+
+  return (
+    <Button
+      data-ocid="admin.trailer.set_available.button"
+      variant="outline"
+      size="sm"
+      className="h-8 text-xs text-green-700 border-green-300 hover:bg-green-50 gap-1"
+      onClick={handleClick}
+      disabled={isPending}
+    >
+      {isPending ? (
+        <Loader2 className="w-3 h-3 animate-spin" />
+      ) : (
+        <CheckCircle className="w-3 h-3" />
+      )}
+      Sätt tillgänglig
+    </Button>
+  );
+}
+
+export default function AdminPage() {
+  const { data: isAdmin, isLoading: adminLoading } = useIsAdmin();
+  const { data: partTypes, isLoading: ptLoading } = useListPartTypes();
+  const { data: trailers, isLoading: trailersLoading } = useListTrailers();
+
+  if (adminLoading) {
+    return (
+      <div className="max-w-2xl mx-auto px-4 py-6 space-y-4">
+        <Skeleton className="h-8 w-40" />
+        <Skeleton className="h-48 rounded-xl" />
+      </div>
+    );
+  }
+
+  if (!isAdmin) {
+    return (
+      <div className="max-w-2xl mx-auto px-4 py-6 text-center">
+        <Settings className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
+        <h2 className="text-xl font-semibold">Åtkomst nekad</h2>
+        <p className="text-muted-foreground mt-1">
+          Du har inte admin-behörighet
+        </p>
+        <Link to="/">
+          <Button className="mt-4">Tillbaka till dashboard</Button>
+        </Link>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-2xl mx-auto px-4 py-6 space-y-5 animate-fade-in">
+      <div>
+        <h1 className="text-2xl font-bold flex items-center gap-2">
+          <Settings className="w-6 h-6" />
+          Admin
+        </h1>
+        <p className="text-muted-foreground text-sm mt-1">
+          Hantera trailers och deltyper
+        </p>
+      </div>
+
+      <div className="bg-white rounded-xl shadow-card p-5">
+        <h2 className="font-semibold text-lg flex items-center gap-2 mb-4">
+          <Truck className="w-5 h-5" />
+          Skapa ny trailer
+        </h2>
+        <CreateTrailerForm />
+      </div>
+
+      <div className="bg-white rounded-xl shadow-card p-5">
+        <h2 className="font-semibold text-lg flex items-center gap-2 mb-4">
+          <Truck className="w-5 h-5" />
+          Trailers ({trailers?.length ?? 0})
+        </h2>
+        {trailersLoading ? (
+          <div className="space-y-2">
+            {[1, 2, 3].map((i) => (
+              <Skeleton key={i} className="h-12 rounded-lg" />
+            ))}
+          </div>
+        ) : trailers && trailers.length > 0 ? (
+          <div className="space-y-3">
+            {trailers.map((t, i) => (
+              <div
+                key={t.code}
+                data-ocid={`admin.trailers.item.${i + 1}`}
+                className="border border-border rounded-lg p-3"
+              >
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div>
+                    <span className="font-bold">{t.code}</span>
+                    <span className="text-muted-foreground ml-2 text-sm">
+                      {t.name}
+                    </span>
+                    <span className="ml-2 text-xs text-muted-foreground">
+                      ({statusLabel(t.status)})
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <SetAvailableButton trailer={t} />
+                    <Link to="/trailer/$id" params={{ id: t.id.toString() }}>
+                      <Button variant="ghost" size="sm" className="h-8 text-xs">
+                        Visa
+                      </Button>
+                    </Link>
+                  </div>
+                </div>
+                <LoadoutEditor trailerId={t.id} trailerCode={t.code} />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p
+            data-ocid="admin.trailers.empty_state"
+            className="text-sm text-muted-foreground"
+          >
+            Inga trailers skapade ännu
+          </p>
+        )}
+      </div>
+
+      <div className="bg-white rounded-xl shadow-card p-5">
+        <h2 className="font-semibold text-lg flex items-center gap-2 mb-4">
+          <Package className="w-5 h-5" />
+          Skapa deltyp
+        </h2>
+        <CreatePartTypeForm />
+      </div>
+
+      <div className="bg-white rounded-xl shadow-card p-5">
+        <h2 className="font-semibold text-lg flex items-center gap-2 mb-4">
+          <Package className="w-5 h-5" />
+          Deltyper ({partTypes?.length ?? 0})
+        </h2>
+        {ptLoading ? (
+          <div className="space-y-2">
+            {[1, 2].map((i) => (
+              <Skeleton key={i} className="h-10 rounded-lg" />
+            ))}
+          </div>
+        ) : partTypes && partTypes.length > 0 ? (
+          <div className="space-y-2">
+            {partTypes.map((pt, i) => (
+              <div
+                key={pt.name}
+                data-ocid={`admin.parttypes.item.${i + 1}`}
+                className="flex items-center justify-between py-2 px-3 bg-muted rounded-lg"
+              >
+                <span className="font-medium text-sm">{pt.name}</span>
+                <span className="text-xs text-muted-foreground">
+                  {pt.unitLabel}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p
+            data-ocid="admin.parttypes.empty_state"
+            className="text-sm text-muted-foreground"
+          >
+            Inga deltyper skapade
+          </p>
+        )}
+      </div>
+
+      <HistorySection trailers={trailers ?? []} />
+    </div>
+  );
+}
