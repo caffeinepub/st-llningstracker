@@ -4,6 +4,7 @@ import { Link } from "@tanstack/react-router";
 import {
   ArrowDownLeft,
   ArrowUpRight,
+  ClipboardCheck,
   Package,
   ScanLine,
   Truck,
@@ -52,15 +53,27 @@ export default function Dashboard() {
             Översikt över alla ställningstrailers
           </p>
         </div>
-        <Link to="/scan">
-          <Button
-            data-ocid="dashboard.scan.primary_button"
-            className="bg-primary text-primary-foreground hover:bg-primary/90 h-10 font-semibold"
-          >
-            <ScanLine className="w-4 h-4 mr-1.5" />
-            <span className="hidden sm:inline">Skanna</span>
-          </Button>
-        </Link>
+        <div className="flex gap-2">
+          <Link to="/besiktning">
+            <Button
+              data-ocid="dashboard.besiktning.primary_button"
+              variant="outline"
+              className="h-10 font-semibold gap-1.5"
+            >
+              <ClipboardCheck className="w-4 h-4" />
+              <span className="hidden sm:inline">Besiktning</span>
+            </Button>
+          </Link>
+          <Link to="/scan">
+            <Button
+              data-ocid="dashboard.scan.primary_button"
+              className="bg-primary text-primary-foreground hover:bg-primary/90 h-10 font-semibold"
+            >
+              <ScanLine className="w-4 h-4 mr-1.5" />
+              <span className="hidden sm:inline">Skanna</span>
+            </Button>
+          </Link>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -124,7 +137,7 @@ export default function Dashboard() {
                     {trailer.description}
                   </p>
                 )}
-                <div className="flex gap-2 mt-auto pt-1">
+                <div className="flex gap-2 mt-auto pt-1 flex-wrap">
                   <Link
                     to="/trailer/$id"
                     params={{ id: trailer.id.toString() }}
@@ -169,6 +182,20 @@ export default function Dashboard() {
                       </Button>
                     </Link>
                   )}
+                  <Link
+                    to="/besiktning/$id"
+                    params={{ id: trailer.id.toString() }}
+                    className="flex-1"
+                  >
+                    <Button
+                      data-ocid={`trailers.besiktning.button.${idx + 1}`}
+                      variant="outline"
+                      className="w-full h-11 text-sm text-purple-700 border-purple-200 hover:bg-purple-50"
+                    >
+                      <ClipboardCheck className="w-4 h-4 mr-1" />
+                      Besikta
+                    </Button>
+                  </Link>
                 </div>
               </div>
             ))}

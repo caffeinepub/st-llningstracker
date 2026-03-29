@@ -4,6 +4,7 @@ import { createRootRoute, createRoute } from "@tanstack/react-router";
 import AuthGate from "./components/AuthGate";
 import Layout from "./components/Layout";
 import AdminPage from "./pages/AdminPage";
+import BesiktningPage from "./pages/BesiktningPage";
 import CheckoutPage from "./pages/CheckoutPage";
 import Dashboard from "./pages/Dashboard";
 import PrintPage from "./pages/PrintPage";
@@ -62,6 +63,18 @@ const adminRoute = createRoute({
   component: AdminPage,
 });
 
+const besiktningRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/besiktning",
+  component: BesiktningPage,
+});
+
+const besiktningIdRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/besiktning/$id",
+  component: BesiktningPage,
+});
+
 const routeTree = rootRoute.addChildren([
   dashboardRoute,
   trailerDetailRoute,
@@ -70,6 +83,8 @@ const routeTree = rootRoute.addChildren([
   returnRoute,
   printRoute,
   adminRoute,
+  besiktningRoute,
+  besiktningIdRoute,
 ]);
 
 const router = createRouter({ routeTree });

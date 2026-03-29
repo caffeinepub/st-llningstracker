@@ -7,12 +7,16 @@ interface PhotoCaptureProps {
   title: string;
   onPhotosConfirmed: (photos: File[]) => void;
   onSkip: () => void;
+  skipLabel?: string;
+  maxPhotos?: number;
 }
 
 export default function PhotoCapture({
   title,
   onPhotosConfirmed,
   onSkip,
+  skipLabel = "Hoppa över",
+  maxPhotos = 3,
 }: PhotoCaptureProps) {
   const [photos, setPhotos] = useState<{ file: File; previewUrl: string }[]>(
     [],
@@ -31,7 +35,6 @@ export default function PhotoCapture({
     quality: 0.85,
   });
 
-  // Store stable refs to avoid exhaustive-deps issues with memoized callbacks
   const startCameraRef = useRef(startCamera);
   const stopCameraRef = useRef(stopCamera);
   startCameraRef.current = startCamera;
@@ -55,7 +58,7 @@ export default function PhotoCapture({
   }, []);
 
   const handleCapture = async () => {
-    if (photos.length >= 3) return;
+    if (photos.length >= maxPhotos) return;
     const file = await capturePhoto();
     if (!file) return;
     const previewUrl = URL.createObjectURL(file);
@@ -86,7 +89,7 @@ export default function PhotoCapture({
           <h2 className="text-xl font-bold">{title}</h2>
         </div>
         <p className="text-sm text-muted-foreground">
-          Valfritt — upp till 3 foton
+          Valfritt — upp till {maxPhotos} foton
         </p>
       </div>
 
@@ -121,7 +124,7 @@ export default function PhotoCapture({
               type="button"
               data-ocid="photo.capture.button"
               onClick={handleCapture}
-              disabled={photos.length >= 3}
+              disabled={photos.length >= maxPhotos}
               className="w-16 h-16 rounded-full border-4 border-white bg-white/20 hover:bg-white/40 active:scale-95 transition-all disabled:opacity-40 flex items-center justify-center shadow-lg"
               aria-label="Ta foto"
             >
@@ -133,7 +136,7 @@ export default function PhotoCapture({
 
       {/* Thumbnails */}
       {photos.length > 0 && (
-        <div className="px-5 py-3 flex gap-2">
+        <div className="px-5 py-3 flex gap-2 flex-wrap">
           {photos.map((p, i) => (
             <div
               key={p.previewUrl}
@@ -157,12 +160,12 @@ export default function PhotoCapture({
               </button>
             </div>
           ))}
-          {photos.length < 3 && (
+          {photos.length < maxPhotos && (
             <div
               className="rounded-lg border-2 border-dashed border-border flex items-center justify-center text-xs text-muted-foreground"
               style={{ height: 60, width: 80 }}
             >
-              +{3 - photos.length}
+              +{maxPhotos - photos.length}
             </div>
           )}
         </div>
@@ -187,7 +190,7 @@ export default function PhotoCapture({
           className="w-full h-12 gap-2 text-muted-foreground"
         >
           <SkipForward className="w-4 h-4" />
-          Hoppa över
+          {skipLabel}
         </Button>
       </div>
     </div>

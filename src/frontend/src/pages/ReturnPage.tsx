@@ -13,6 +13,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { type ReturnItem, Variant_ok_missing_extra } from "../backend";
 import PhotoCapture from "../components/PhotoCapture";
+import SignaturePad from "../components/SignaturePad";
 import TrailerScanStep from "../components/TrailerScanStep";
 import {
   useListPartTypes,
@@ -43,7 +44,7 @@ const DISC_LABELS: Record<Variant_ok_missing_extra, string> = {
   extra: "Extra",
 };
 
-type Step = "scan" | "counts" | "photo" | "done";
+type Step = "scan" | "counts" | "photo" | "signature" | "done";
 
 export default function ReturnPage() {
   const { id } = useParams({ from: "/trailer/$id/return" });
@@ -58,6 +59,8 @@ export default function ReturnPage() {
   const [step, setStep] = useState<Step>("scan");
   const [actualCounts, setActualCounts] = useState<Record<string, string>>({});
   const [photos, setPhotos] = useState<File[]>([]);
+  const [customerSignature, setCustomerSignature] = useState<File | null>(null);
+  const [staffSignature, setStaffSignature] = useState<File | null>(null);
   const [result, setResult] = useState<ReturnItem[] | null>(null);
   const [uploading, setUploading] = useState(false);
 
@@ -71,7 +74,7 @@ export default function ReturnPage() {
     return val ? Number.parseInt(val, 10) || 0 : 0;
   };
 
-  const handleReturn = async (capturedPhotos: File[]) => {
+  const handleReturn = async () => {
     if (!loadout) return;
     const items: ReturnItem[] = loadout.map((item) => {
       const expected = Number(item.quantity);
@@ -84,12 +87,17 @@ export default function ReturnPage() {
       };
     });
     try {
+      const allFiles = [
+        ...photos,
+        ...(customerSignature ? [customerSignature] : []),
+        ...(staffSignature ? [staffSignature] : []),
+      ];
       let hashes: string[] = [];
-      if (capturedPhotos.length > 0) {
+      if (allFiles.length > 0) {
         setUploading(true);
         toast.loading("Laddar upp bilder...", { id: "photo-upload" });
         try {
-          hashes = await uploadPhotos(capturedPhotos);
+          hashes = await uploadPhotos(allFiles);
           toast.dismiss("photo-upload");
         } catch {
           toast.dismiss("photo-upload");
@@ -108,11 +116,11 @@ export default function ReturnPage() {
 
   const handlePhotosConfirmed = (capturedPhotos: File[]) => {
     setPhotos(capturedPhotos);
-    handleReturn(capturedPhotos);
+    setStep("signature");
   };
 
   const handleSkipPhoto = () => {
-    handleReturn([]);
+    setStep("signature");
   };
 
   const hasDiscrepancies = result?.some(
@@ -188,6 +196,12 @@ export default function ReturnPage() {
                 </div>
               )}
 
+              {(customerSignature || staffSignature) && (
+                <div className="mb-4 text-sm text-green-700 font-medium">
+                  ✅ Signaturer sparade
+                </div>
+              )}
+
               <div className="space-y-2">
                 {result.map((item, i) => (
                   <div
@@ -249,6 +263,43 @@ export default function ReturnPage() {
               onPhotosConfirmed={handlePhotosConfirmed}
               onSkip={handleSkipPhoto}
             />
+          </motion.div>
+        ) : step === "signature" ? (
+          <motion.div
+            key="signature"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+          >
+            <div className="bg-white rounded-xl shadow-card p-5 space-y-6">
+              <div>
+                <h1 className="text-xl font-bold">Signaturer</h1>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Både signaturer är valfria men rekommenderas.
+                </p>
+              </div>
+
+              <SignaturePad
+                label="Kundens signatur"
+                onSigned={(file) => setCustomerSignature(file)}
+                onClear={() => setCustomerSignature(null)}
+              />
+
+              <SignaturePad
+                label="Personalens signatur"
+                onSigned={(file) => setStaffSignature(file)}
+                onClear={() => setStaffSignature(null)}
+              />
+
+              <Button
+                data-ocid="return.signature.primary_button"
+                onClick={handleReturn}
+                disabled={isPending || uploading}
+                className="w-full h-14 text-base font-bold gap-2"
+              >
+                <ArrowDownLeft className="w-5 h-5" />
+                {isPending || uploading ? "Sparar..." : "Bekräfta inlämning"}
+              </Button>
+            </div>
           </motion.div>
         ) : (
           <motion.div
@@ -326,7 +377,7 @@ export default function ReturnPage() {
                   <ArrowDownLeft className="w-5 h-5" />
                   {isPending || uploading
                     ? "Sparar..."
-                    : "Nästa — Foto & bekräfta"}
+                    : "Nästa — Foto & signatur"}
                 </Button>
               </div>
             </div>

@@ -1,6 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import {
+  ClipboardCheck,
   LayoutDashboard,
   LogOut,
   ScanLine,
@@ -13,6 +14,7 @@ import { useGetCallerUserProfile } from "../hooks/useQueries";
 const NAV_ITEMS = [
   { to: "/", icon: LayoutDashboard, label: "Dashboard" },
   { to: "/scan", icon: ScanLine, label: "Skanna" },
+  { to: "/besiktning", icon: ClipboardCheck, label: "Besiktning" },
   { to: "/admin", icon: Settings, label: "Admin" },
 ];
 

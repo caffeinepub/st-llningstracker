@@ -5,7 +5,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "@tanstack/react-router";
 import {
   CheckCircle,
+  ClipboardCheck,
   Clock,
+  Copy,
   History,
   Loader2,
   Package,
@@ -14,21 +16,20 @@ import {
   Truck,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Variant_created_loadoutSet_statusChanged_checkedOut_returned } from "../backend";
 import { TrailerStatus } from "../backend";
 import { loadConfig } from "../config";
 import {
   useAllActivityLogs,
-  useCheckoutPhotos,
+  useAllPhotos,
   useCreatePartType,
   useCreateTrailer,
-  useIsAdmin,
+  useGetAllInspections,
   useListPartTypes,
   useListTrailers,
   useLoadout,
-  useReturnPhotos,
   useSetLoadout,
   useUpdateTrailer,
 } from "../hooks/useQueries";
@@ -179,37 +180,19 @@ function statusLabel(status: TrailerStatus): string {
   }
 }
 
-// --- TrailerHistoryRow ---
+// --- TrailerHistoryRow: receives photos as prop, no hooks for photos ---
 function TrailerHistoryRow({
   entry,
   trailers,
   idx,
+  photoHashes,
 }: {
   entry: ActivityLogEntry;
   trailers: Trailer[];
   idx: number;
+  photoHashes: string[];
 }) {
-  const isCheckout =
-    entry.action ===
-    Variant_created_loadoutSet_statusChanged_checkedOut_returned.checkedOut;
-  const isReturn =
-    entry.action ===
-    Variant_created_loadoutSet_statusChanged_checkedOut_returned.returned;
-
   const trailer = trailers.find((t) => t.id === entry.trailerId);
-
-  const { data: checkoutPhotos } = useCheckoutPhotos(
-    isCheckout ? entry.trailerId : undefined,
-  );
-  const { data: returnPhotos } = useReturnPhotos(
-    isReturn ? entry.trailerId : undefined,
-  );
-
-  const photos = isCheckout
-    ? (checkoutPhotos ?? [])
-    : isReturn
-      ? (returnPhotos ?? [])
-      : [];
 
   const dateStr = new Date(Number(entry.timestamp / 1_000_000n)).toLocaleString(
     "sv-SE",
@@ -256,7 +239,7 @@ function TrailerHistoryRow({
           )}
         </div>
       </div>
-      {photos.length > 0 && <PhotoGrid hashes={photos} />}
+      {photoHashes.length > 0 && <PhotoGrid hashes={photoHashes} />}
     </div>
   );
 }
@@ -264,6 +247,51 @@ function TrailerHistoryRow({
 // --- HistorySection ---
 function HistorySection({ trailers }: { trailers: Trailer[] }) {
   const { data: logs, isLoading } = useAllActivityLogs();
+
+  const uniqueTrailerIds = useMemo(() => {
+    if (!logs) return [];
+    const seen = new Set<string>();
+    const ids: bigint[] = [];
+    for (const entry of logs) {
+      const key = entry.trailerId.toString();
+      if (!seen.has(key)) {
+        seen.add(key);
+        ids.push(entry.trailerId);
+      }
+    }
+    return ids;
+  }, [logs]);
+
+  const { data: allPhotos } = useAllPhotos(uniqueTrailerIds);
+
+  const photosByLogIndex = useMemo(() => {
+    if (!logs || !allPhotos) return {};
+    const assignedCheckout = new Set<string>();
+    const assignedReturn = new Set<string>();
+    const result: Record<number, string[]> = {};
+    const isCheckout =
+      Variant_created_loadoutSet_statusChanged_checkedOut_returned.checkedOut;
+    const isReturn =
+      Variant_created_loadoutSet_statusChanged_checkedOut_returned.returned;
+
+    logs.forEach((entry, i) => {
+      const tid = entry.trailerId.toString();
+      if (entry.action === isCheckout && !assignedCheckout.has(tid)) {
+        const photos = allPhotos.checkoutPhotos[tid] ?? [];
+        if (photos.length > 0) {
+          result[i] = photos;
+          assignedCheckout.add(tid);
+        }
+      } else if (entry.action === isReturn && !assignedReturn.has(tid)) {
+        const photos = allPhotos.returnPhotos[tid] ?? [];
+        if (photos.length > 0) {
+          result[i] = photos;
+          assignedReturn.add(tid);
+        }
+      }
+    });
+    return result;
+  }, [logs, allPhotos]);
 
   return (
     <div className="bg-white rounded-xl shadow-card p-5">
@@ -285,6 +313,7 @@ function HistorySection({ trailers }: { trailers: Trailer[] }) {
               entry={entry}
               trailers={trailers}
               idx={i + 1}
+              photoHashes={photosByLogIndex[i] ?? []}
             />
           ))}
         </div>
@@ -296,6 +325,186 @@ function HistorySection({ trailers }: { trailers: Trailer[] }) {
           Ingen historik ännu
         </p>
       )}
+    </div>
+  );
+}
+
+// --- InspectionsSection ---
+function InspectionsSection({ trailers }: { trailers: Trailer[] }) {
+  const { data: inspections, isLoading } = useGetAllInspections();
+
+  return (
+    <div className="bg-white rounded-xl shadow-card p-5">
+      <h2 className="font-semibold text-lg flex items-center gap-2 mb-4">
+        <ClipboardCheck className="w-5 h-5" />
+        Besiktningar
+      </h2>
+      {isLoading ? (
+        <div className="space-y-3" data-ocid="inspections.loading_state">
+          {[1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-20 rounded-xl" />
+          ))}
+        </div>
+      ) : inspections && inspections.length > 0 ? (
+        <div className="space-y-3">
+          {(inspections as any[]).map((insp, i) => {
+            const trailer = trailers.find((t) => t.id === insp.trailerId);
+            const dateStr = new Date(
+              Number(insp.startTime / 1_000_000n),
+            ).toLocaleString("sv-SE", {
+              dateStyle: "short",
+              timeStyle: "short",
+            });
+            const isClosed =
+              insp.status === "closed" ||
+              (typeof insp.status === "object" && "closed" in insp.status);
+            return (
+              <div
+                key={insp.id?.toString() ?? i}
+                data-ocid={`inspections.item.${i + 1}`}
+                className="border border-border rounded-xl p-3 bg-white"
+              >
+                <div className="flex items-start justify-between gap-2 flex-wrap">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-bold text-sm">
+                        {trailer?.code ??
+                          `Trailer #${insp.trailerId?.toString()}`}
+                      </span>
+                      {trailer && (
+                        <span className="text-xs text-muted-foreground">
+                          {trailer.name}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 mt-1 flex-wrap">
+                      <span
+                        className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                          isClosed
+                            ? "bg-green-100 text-green-700"
+                            : "bg-amber-100 text-amber-700"
+                        }`}
+                      >
+                        {isClosed ? "Avslutad" : "Pågående"}
+                      </span>
+                      <span className="text-xs text-muted-foreground flex items-center gap-1">
+                        <Clock className="w-3 h-3" />
+                        {dateStr}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {(insp.photoHashes as string[])?.length ?? 0} foton
+                      </span>
+                    </div>
+                    {insp.comments && (
+                      <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
+                        {insp.comments}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                {(insp.photoHashes as string[])?.length > 0 && (
+                  <PhotoGrid hashes={insp.photoHashes as string[]} />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <p
+          data-ocid="inspections.empty_state"
+          className="text-sm text-muted-foreground"
+        >
+          Inga besiktningar gjorda ännu
+        </p>
+      )}
+    </div>
+  );
+}
+
+// --- CopyLoadoutButton ---
+function CopyLoadoutButton({
+  trailer,
+  trailers,
+}: { trailer: Trailer; trailers: Trailer[] }) {
+  const [open, setOpen] = useState(false);
+  const [targetId, setTargetId] = useState<string>("");
+  const { data: sourceLoadout } = useLoadout(trailer.id);
+  const { mutateAsync: setLoadout, isPending } = useSetLoadout();
+
+  const otherTrailers = trailers.filter((t) => t.id !== trailer.id);
+
+  const handleCopy = async () => {
+    if (!targetId || !sourceLoadout) return;
+    try {
+      await setLoadout({
+        trailerId: BigInt(targetId),
+        items: sourceLoadout,
+      });
+      toast.success("Lastlista kopierad!");
+      setOpen(false);
+      setTargetId("");
+    } catch {
+      toast.error("Kunde inte kopiera lastlista.");
+    }
+  };
+
+  if (!open) {
+    return (
+      <Button
+        data-ocid="admin.loadout.copy.button"
+        variant="ghost"
+        size="sm"
+        className="h-8 text-xs gap-1"
+        onClick={() => {
+          if (!sourceLoadout || sourceLoadout.length === 0) {
+            toast.info("Denna trailer har ingen lastlista att kopiera.");
+            return;
+          }
+          setOpen(true);
+        }}
+      >
+        <Copy className="w-3 h-3" />
+        Kopiera lastlista
+      </Button>
+    );
+  }
+
+  return (
+    <div className="mt-2 flex items-center gap-2 border-t border-border pt-2">
+      <select
+        data-ocid="admin.loadout.copy.select"
+        value={targetId}
+        onChange={(e) => setTargetId(e.target.value)}
+        className="flex-1 h-8 text-xs border border-border rounded-md px-2 bg-background"
+      >
+        <option value="">Välj måltrailer...</option>
+        {otherTrailers.map((t) => (
+          <option key={t.id.toString()} value={t.id.toString()}>
+            {t.code} — {t.name}
+          </option>
+        ))}
+      </select>
+      <Button
+        data-ocid="admin.loadout.copy.confirm_button"
+        size="sm"
+        disabled={!targetId || isPending}
+        onClick={handleCopy}
+        className="h-8 text-xs"
+      >
+        {isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : "Kopiera"}
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="h-8 text-xs"
+        onClick={() => {
+          setOpen(false);
+          setTargetId("");
+        }}
+      >
+        Avbryt
+      </Button>
     </div>
   );
 }
@@ -581,33 +790,8 @@ function SetAvailableButton({ trailer }: { trailer: Trailer }) {
 }
 
 export default function AdminPage() {
-  const { data: isAdmin, isLoading: adminLoading } = useIsAdmin();
   const { data: partTypes, isLoading: ptLoading } = useListPartTypes();
   const { data: trailers, isLoading: trailersLoading } = useListTrailers();
-
-  if (adminLoading) {
-    return (
-      <div className="max-w-2xl mx-auto px-4 py-6 space-y-4">
-        <Skeleton className="h-8 w-40" />
-        <Skeleton className="h-48 rounded-xl" />
-      </div>
-    );
-  }
-
-  if (!isAdmin) {
-    return (
-      <div className="max-w-2xl mx-auto px-4 py-6 text-center">
-        <Settings className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
-        <h2 className="text-xl font-semibold">Åtkomst nekad</h2>
-        <p className="text-muted-foreground mt-1">
-          Du har inte admin-behörighet
-        </p>
-        <Link to="/">
-          <Button className="mt-4">Tillbaka till dashboard</Button>
-        </Link>
-      </div>
-    );
-  }
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-6 space-y-5 animate-fade-in">
@@ -658,7 +842,7 @@ export default function AdminPage() {
                       ({statusLabel(t.status)})
                     </span>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <SetAvailableButton trailer={t} />
                     <Link to="/trailer/$id" params={{ id: t.id.toString() }}>
                       <Button variant="ghost" size="sm" className="h-8 text-xs">
@@ -667,7 +851,10 @@ export default function AdminPage() {
                     </Link>
                   </div>
                 </div>
-                <LoadoutEditor trailerId={t.id} trailerCode={t.code} />
+                <div className="flex flex-wrap gap-1 mt-1">
+                  <LoadoutEditor trailerId={t.id} trailerCode={t.code} />
+                  <CopyLoadoutButton trailer={t} trailers={trailers} />
+                </div>
               </div>
             ))}
           </div>
@@ -725,6 +912,7 @@ export default function AdminPage() {
         )}
       </div>
 
+      <InspectionsSection trailers={trailers ?? []} />
       <HistorySection trailers={trailers ?? []} />
     </div>
   );

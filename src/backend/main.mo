@@ -24,7 +24,6 @@ actor {
   // Types
   public type TrailerStatus = { #available; #out; #returned; #incomplete };
 
-  // Internal storage type (no id field - compatible with existing stable data)
   type TrailerData = {
     code : Text;
     name : Text;
@@ -32,7 +31,6 @@ actor {
     status : TrailerStatus;
   };
 
-  // Public return type (includes id)
   public type Trailer = {
     id : Nat;
     code : Text;
@@ -50,13 +48,11 @@ actor {
     };
   };
 
-  // Internal storage type for PartType (no id)
   type PartTypeData = {
     name : Text;
     unitLabel : Text;
   };
 
-  // Public return type for PartType (includes id)
   public type PartType = {
     id : Nat;
     name : Text;
@@ -116,6 +112,7 @@ actor {
       #checkedOut;
       #returned;
       #statusChanged;
+
     };
     user : Principal;
     timestamp : Time.Time;
@@ -129,7 +126,21 @@ actor {
     incomplete : Nat;
   };
 
-  // Storage (uses internal types WITHOUT id to preserve stable compatibility)
+  // Inspection type
+  public type InspectionStatus = { #open; #closed };
+
+  public type Inspection = {
+    id : Nat;
+    trailerId : Nat;
+    user : Principal;
+    startTime : Time.Time;
+    endTime : ?Time.Time;
+    photoHashes : [Text];
+    comments : Text;
+    status : InspectionStatus;
+  };
+
+  // Storage
   let trailers = Map.empty<Nat, TrailerData>();
   let partTypes = Map.empty<Nat, PartTypeData>();
   let loadouts = Map.empty<Nat, [LoadoutItem]>();
@@ -138,9 +149,11 @@ actor {
   let checkoutPhotos = Map.empty<Nat, [Text]>();
   let returnPhotos = Map.empty<Nat, [Text]>();
   let activityLogs = Map.empty<Nat, [ActivityLogEntry]>();
+  let inspections = Map.empty<Nat, Inspection>();
 
   var nextTrailerId = 1;
   var nextPartTypeId = 1;
+  var nextInspectionId = 1;
 
   func returnItemMapSorter(returnItems : Map.Map<Nat, ReturnItem>) : [(Nat, ReturnItem)] {
     returnItems.entries().toArray().sort(
@@ -148,7 +161,6 @@ actor {
     );
   };
 
-  // Helper: convert internal TrailerData + key to public Trailer
   func toTrailer(id : Nat, data : TrailerData) : Trailer = {
     id;
     code = data.code;
@@ -157,7 +169,6 @@ actor {
     status = data.status;
   };
 
-  // Helper: convert internal PartTypeData + key to public PartType
   func toPartType(id : Nat, data : PartTypeData) : PartType = {
     id;
     name = data.name;
@@ -195,7 +206,7 @@ actor {
     let data : TrailerData = { code; name; description; status = #available };
     trailers.add(id, data);
     nextTrailerId += 1;
-    addTrailerLog(caller, #created, id, "Trailer created by admin", #available);
+    addTrailerLog(caller, #created, id, "Trailer created by admin");
     id;
   };
 
@@ -210,13 +221,13 @@ actor {
         let updated : TrailerData = { code = data.code; name; description; status };
         trailers.add(id, updated);
         if (data.status != status) {
-          addTrailerLog(caller, #statusChanged, id, "Status changed by admin", status);
+          addTrailerLog(caller, #statusChanged, id, "Status changed by admin");
         };
       };
     };
   };
 
-  // Get trailer by id (authenticated users only)
+  // Get trailer by id
   public query ({ caller }) func getTrailer(id : Nat) : async Trailer {
     if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
       Runtime.trap("Unauthorized: Only authenticated users can view trailers");
@@ -227,7 +238,7 @@ actor {
     };
   };
 
-  // List all trailers (authenticated users only)
+  // List all trailers
   public query ({ caller }) func listTrailers() : async [Trailer] {
     if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
       Runtime.trap("Unauthorized: Only authenticated users can list trailers");
@@ -249,7 +260,7 @@ actor {
     id;
   };
 
-  // List all part types (authenticated users only)
+  // List all part types
   public query ({ caller }) func listPartTypes() : async [PartType] {
     if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
       Runtime.trap("Unauthorized: Only authenticated users can list part types");
@@ -270,10 +281,10 @@ actor {
       };
     };
     loadouts.add(trailerId, items);
-    addTrailerLog(caller, #loadoutSet, trailerId, "Loadout set by admin", #available);
+    addTrailerLog(caller, #loadoutSet, trailerId, "Loadout set by admin");
   };
 
-  // Get loadout by trailer id (authenticated users only)
+  // Get loadout by trailer id
   public query ({ caller }) func getLoadout(trailerId : Nat) : async [LoadoutItem] {
     if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
       Runtime.trap("Unauthorized: Only authenticated users can view loadouts");
@@ -284,7 +295,7 @@ actor {
     };
   };
 
-  // Checkout trailer (staff & admin)
+  // Checkout trailer
   public shared ({ caller }) func checkoutTrailer(trailerId : Nat, photoHashes : [Text]) : async () {
     if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
       Runtime.trap("Unauthorized: Only staff can checkout trailers");
@@ -302,12 +313,12 @@ actor {
         };
         checkouts.add(trailerId, { trailerId; user = caller; timestamp = Time.now(); loadoutSnapshot = loadout });
         if (photoHashes.size() > 0) { checkoutPhotos.add(trailerId, photoHashes) };
-        addTrailerLog(caller, #checkedOut, trailerId, "Trailer checked out", #out);
+        addTrailerLog(caller, #checkedOut, trailerId, "Trailer checked out");
       };
     };
   };
 
-  // Return trailer (staff & admin)
+  // Return trailer
   public shared ({ caller }) func returnTrailer(trailerId : Nat, actualItems : [ReturnItem], photoHashes : [Text]) : async () {
     if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
       Runtime.trap("Unauthorized: Only staff can return trailers");
@@ -350,12 +361,105 @@ actor {
           status = if (hasMissing) { #incomplete } else { #complete };
         });
         if (photoHashes.size() > 0) { returnPhotos.add(trailerId, photoHashes) };
-        addTrailerLog(caller, #returned, trailerId, "Trailer returned", status);
+        addTrailerLog(caller, #returned, trailerId, "Trailer returned");
       };
     };
   };
 
-  // Get trailer activity log (authenticated users only)
+  // --- INSPECTION FUNCTIONS ---
+
+  // Start an inspection (authenticated users)
+  public shared ({ caller }) func startInspection(trailerId : Nat, photoHashes : [Text], comments : Text) : async Nat {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
+      Runtime.trap("Unauthorized: Only authenticated users can start inspections");
+    };
+    switch (trailers.get(trailerId)) {
+      case (null) { Runtime.trap("Trailer not found") };
+      case (?_) {};
+    };
+    let id = nextInspectionId;
+    let inspection : Inspection = {
+      id;
+      trailerId;
+      user = caller;
+      startTime = Time.now();
+      endTime = null;
+      photoHashes;
+      comments;
+      status = #open;
+    };
+    inspections.add(id, inspection);
+    nextInspectionId += 1;
+
+    id;
+  };
+
+  // Close an inspection by scanning QR code (validates trailer code)
+  public shared ({ caller }) func closeInspection(inspectionId : Nat, trailerCode : Text) : async () {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
+      Runtime.trap("Unauthorized: Only authenticated users can close inspections");
+    };
+    switch (inspections.get(inspectionId)) {
+      case (null) { Runtime.trap("Inspection not found") };
+      case (?insp) {
+        if (insp.status == #closed) {
+          Runtime.trap("Inspection is already closed");
+        };
+        // Validate trailer code
+        switch (trailers.get(insp.trailerId)) {
+          case (null) { Runtime.trap("Trailer not found") };
+          case (?trailer) {
+            if (trailer.code != trailerCode) {
+              Runtime.trap("QR-kod stämmer inte med trailern");
+            };
+          };
+        };
+        let closed : Inspection = {
+          id = insp.id;
+          trailerId = insp.trailerId;
+          user = insp.user;
+          startTime = insp.startTime;
+          endTime = ?Time.now();
+          photoHashes = insp.photoHashes;
+          comments = insp.comments;
+          status = #closed;
+        };
+        inspections.add(inspectionId, closed);
+
+      };
+    };
+  };
+
+  // Get inspections for a trailer (authenticated users)
+  public query ({ caller }) func getInspections(trailerId : Nat) : async [Inspection] {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
+      Runtime.trap("Unauthorized");
+    };
+    let all = inspections.entries().toArray();
+    let filtered = all
+      .filter(func(kv) { kv.1.trailerId == trailerId })
+      .map(func(kv) { kv.1 });
+    filtered.sort(func(a, b) {
+      if (a.startTime > b.startTime) { #less }
+      else if (a.startTime < b.startTime) { #greater }
+      else { #equal }
+    });
+  };
+
+  // Get ALL inspections (admin only)
+  public query ({ caller }) func getAllInspections() : async [Inspection] {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #admin))) {
+      Runtime.trap("Unauthorized: Only admins can view all inspections");
+    };
+    let all = inspections.entries().toArray().map(func(kv) { kv.1 });
+    all.sort(func(a, b) {
+      if (a.startTime > b.startTime) { #less }
+      else if (a.startTime < b.startTime) { #greater }
+      else { #equal }
+    });
+  };
+
+  // Get trailer activity log
   public query ({ caller }) func getTrailerLog(trailerId : Nat) : async [ActivityLogEntry] {
     if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
       Runtime.trap("Unauthorized: Only authenticated users can view trailer logs");
@@ -366,7 +470,7 @@ actor {
     };
   };
 
-  // Get ALL activity logs across all trailers (admin only)
+  // Get ALL activity logs (admin only)
   public query ({ caller }) func getAllActivityLogs() : async [ActivityLogEntry] {
     if (not (AccessControl.hasPermission(accessControlState, caller, #admin))) {
       Runtime.trap("Unauthorized: Only admins can view all activity logs");
@@ -382,7 +486,7 @@ actor {
     });
   };
 
-  // Get checkout photos for a trailer (admin only)
+  // Get checkout photos (admin only)
   public query ({ caller }) func getCheckoutPhotos(trailerId : Nat) : async [Text] {
     if (not (AccessControl.hasPermission(accessControlState, caller, #admin))) {
       Runtime.trap("Unauthorized: Only admins can view photos");
@@ -393,7 +497,7 @@ actor {
     };
   };
 
-  // Get return photos for a trailer (admin only)
+  // Get return photos (admin only)
   public query ({ caller }) func getReturnPhotos(trailerId : Nat) : async [Text] {
     if (not (AccessControl.hasPermission(accessControlState, caller, #admin))) {
       Runtime.trap("Unauthorized: Only admins can view photos");
@@ -404,7 +508,7 @@ actor {
     };
   };
 
-  // Get dashboard stats (public - no auth required)
+  // Dashboard stats (public)
   public query func getDashboardStats() : async DashboardStats {
     var available = 0;
     var out = 0;
@@ -421,7 +525,7 @@ actor {
     { available; out; returned; incomplete };
   };
 
-  func addTrailerLog(user : Principal, action : { #created; #loadoutSet; #checkedOut; #returned; #statusChanged }, trailerId : Nat, details : Text, status : TrailerStatus) {
+  func addTrailerLog(user : Principal, action : { #created; #loadoutSet; #checkedOut; #returned; #statusChanged }, trailerId : Nat, details : Text) {
     let entry : ActivityLogEntry = { trailerId; action; user; timestamp = Time.now(); details };
     let existing = switch (activityLogs.get(trailerId)) {
       case (null) { [] };

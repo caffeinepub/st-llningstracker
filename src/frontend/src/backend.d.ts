@@ -16,8 +16,19 @@ export interface Trailer { id: bigint; status: TrailerStatus; code: string; name
 export interface PartType { id: bigint; name: string; unitLabel: string; }
 export interface UserProfile { name: string; }
 export interface ReturnItem { expectedCount: bigint; actualCount: bigint; discrepancy: Variant_ok_missing_extra; partTypeId: bigint; }
+export interface Inspection {
+    id: bigint;
+    trailerId: bigint;
+    user: Principal;
+    startTime: bigint;
+    endTime: bigint | null;
+    photoHashes: string[];
+    comments: string;
+    status: InspectionStatus;
+}
 export enum TrailerStatus { out = "out", incomplete = "incomplete", available = "available", returned = "returned" }
 export enum UserRole { admin = "admin", user = "user", guest = "guest" }
+export enum InspectionStatus { open = "open", closed = "closed" }
 export enum Variant_created_loadoutSet_statusChanged_checkedOut_returned {
     created = "created", loadoutSet = "loadoutSet", statusChanged = "statusChanged", checkedOut = "checkedOut", returned = "returned"
 }
@@ -45,4 +56,8 @@ export interface backendInterface {
     saveCallerUserProfile(profile: UserProfile): Promise<void>;
     setLoadout(trailerId: bigint, items: Array<LoadoutItem>): Promise<void>;
     updateTrailer(id: bigint, name: string, description: string, status: TrailerStatus): Promise<void>;
+    startInspection(trailerId: bigint, photoHashes: string[], comments: string): Promise<bigint>;
+    closeInspection(inspectionId: bigint, trailerCode: string): Promise<void>;
+    getInspections(trailerId: bigint): Promise<Array<Inspection>>;
+    getAllInspections(): Promise<Array<Inspection>>;
 }

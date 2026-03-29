@@ -6,6 +6,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { useState } from "react";
 import { toast } from "sonner";
 import PhotoCapture from "../components/PhotoCapture";
+import SignaturePad from "../components/SignaturePad";
 import TrailerScanStep from "../components/TrailerScanStep";
 import {
   useCheckoutTrailer,
@@ -15,7 +16,38 @@ import {
 } from "../hooks/useQueries";
 import { uploadPhotos } from "../utils/uploadPhotos";
 
-type Step = "scan" | "photo" | "confirm";
+type Step = "scan" | "photo" | "signature" | "confirm";
+
+const STEP_LABELS = ["Skanna", "Foto", "Signatur", "Klar"];
+const STEP_KEYS: Step[] = ["scan", "photo", "signature", "confirm"];
+
+function StepProgress({ current }: { current: Step }) {
+  const idx = STEP_KEYS.indexOf(current);
+  return (
+    <div className="flex items-center gap-1 mb-2">
+      {STEP_LABELS.map((label, i) => (
+        <div key={label} className="flex items-center gap-1 flex-1">
+          <div
+            className={`flex-1 h-1.5 rounded-full transition-colors ${
+              i <= idx ? "bg-primary" : "bg-muted"
+            }`}
+          />
+          <span
+            className={`text-xs font-medium whitespace-nowrap ${
+              i === idx
+                ? "text-primary"
+                : i < idx
+                  ? "text-primary/60"
+                  : "text-muted-foreground"
+            }`}
+          >
+            {label}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export default function CheckoutPage() {
   const { id } = useParams({ from: "/trailer/$id/checkout" });
@@ -29,6 +61,8 @@ export default function CheckoutPage() {
 
   const [step, setStep] = useState<Step>("scan");
   const [photos, setPhotos] = useState<File[]>([]);
+  const [customerSignature, setCustomerSignature] = useState<File | null>(null);
+  const [staffSignature, setStaffSignature] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [done, setDone] = useState(false);
 
@@ -39,12 +73,17 @@ export default function CheckoutPage() {
 
   const handleCheckout = async () => {
     try {
+      const allFiles = [
+        ...photos,
+        ...(customerSignature ? [customerSignature] : []),
+        ...(staffSignature ? [staffSignature] : []),
+      ];
       let hashes: string[] = [];
-      if (photos.length > 0) {
+      if (allFiles.length > 0) {
         setUploading(true);
         toast.loading("Laddar upp bilder...", { id: "photo-upload" });
         try {
-          hashes = await uploadPhotos(photos);
+          hashes = await uploadPhotos(allFiles);
           toast.dismiss("photo-upload");
         } catch {
           toast.dismiss("photo-upload");
@@ -63,7 +102,7 @@ export default function CheckoutPage() {
 
   const handlePhotosConfirmed = (capturedPhotos: File[]) => {
     setPhotos(capturedPhotos);
-    setStep("confirm");
+    setStep("signature");
   };
 
   if (isLoading) {
@@ -85,6 +124,8 @@ export default function CheckoutPage() {
         <ArrowLeft className="w-4 h-4" />
         Tillbaka
       </Link>
+
+      {!done && <StepProgress current={step} />}
 
       <AnimatePresence mode="wait">
         {done ? (
@@ -125,8 +166,43 @@ export default function CheckoutPage() {
             <PhotoCapture
               title="Fotografera trailern (valfritt)"
               onPhotosConfirmed={handlePhotosConfirmed}
-              onSkip={() => setStep("confirm")}
+              onSkip={() => setStep("signature")}
             />
+          </motion.div>
+        ) : step === "signature" ? (
+          <motion.div
+            key="signature"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+          >
+            <div className="bg-white rounded-xl shadow-card p-5 space-y-6">
+              <div>
+                <h1 className="text-xl font-bold">Signaturer</h1>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Både signaturer är valfria men rekommenderas.
+                </p>
+              </div>
+
+              <SignaturePad
+                label="Kundens signatur"
+                onSigned={(file) => setCustomerSignature(file)}
+                onClear={() => setCustomerSignature(null)}
+              />
+
+              <SignaturePad
+                label="Personalens signatur"
+                onSigned={(file) => setStaffSignature(file)}
+                onClear={() => setStaffSignature(null)}
+              />
+
+              <Button
+                data-ocid="checkout.signature.primary_button"
+                onClick={() => setStep("confirm")}
+                className="w-full h-14 text-base font-bold gap-2"
+              >
+                Fortsätt
+              </Button>
+            </div>
           </motion.div>
         ) : (
           <motion.div
@@ -162,6 +238,19 @@ export default function CheckoutPage() {
                       );
                     })}
                   </div>
+                </div>
+              )}
+
+              {(customerSignature || staffSignature) && (
+                <div className="text-sm text-green-700 font-medium">
+                  ✅{" "}
+                  {[
+                    customerSignature && "Kundsignatur",
+                    staffSignature && "Personalsignatur",
+                  ]
+                    .filter(Boolean)
+                    .join(" + ")}{" "}
+                  sparad
                 </div>
               )}
 

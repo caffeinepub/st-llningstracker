@@ -133,6 +133,40 @@ export function useReturnPhotos(trailerId: bigint | undefined) {
   });
 }
 
+export function useAllPhotos(trailerIds: bigint[]) {
+  const { actor, isFetching } = useActor();
+  const key = trailerIds.map((id) => id.toString()).join(",");
+  return useQuery<{
+    checkoutPhotos: Record<string, string[]>;
+    returnPhotos: Record<string, string[]>;
+  }>({
+    queryKey: ["allPhotos", key],
+    queryFn: async () => {
+      if (!actor || trailerIds.length === 0)
+        return { checkoutPhotos: {}, returnPhotos: {} };
+      const results = await Promise.all(
+        trailerIds.map(async (id) => {
+          const [co, ret] = await Promise.all([
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (actor as any).getCheckoutPhotos(id) as Promise<string[]>,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (actor as any).getReturnPhotos(id) as Promise<string[]>,
+          ]);
+          return { id: id.toString(), co, ret };
+        }),
+      );
+      const checkoutPhotos: Record<string, string[]> = {};
+      const returnPhotos: Record<string, string[]> = {};
+      for (const r of results) {
+        if (r.co.length > 0) checkoutPhotos[r.id] = r.co;
+        if (r.ret.length > 0) returnPhotos[r.id] = r.ret;
+      }
+      return { checkoutPhotos, returnPhotos };
+    },
+    enabled: !!actor && !isFetching && trailerIds.length > 0,
+  });
+}
+
 export function useIsAdmin() {
   const { actor, isFetching } = useActor();
   return useQuery<boolean>({
@@ -180,6 +214,7 @@ export function useCheckoutTrailer() {
       qc.invalidateQueries({ queryKey: ["dashboardStats"] });
       qc.invalidateQueries({ queryKey: ["allActivityLogs"] });
       qc.invalidateQueries({ queryKey: ["checkoutPhotos"] });
+      qc.invalidateQueries({ queryKey: ["allPhotos"] });
     },
   });
 }
@@ -203,6 +238,7 @@ export function useReturnTrailer() {
       qc.invalidateQueries({ queryKey: ["trailerLog", trailerId.toString()] });
       qc.invalidateQueries({ queryKey: ["allActivityLogs"] });
       qc.invalidateQueries({ queryKey: ["returnPhotos"] });
+      qc.invalidateQueries({ queryKey: ["allPhotos"] });
     },
   });
 }
@@ -298,5 +334,72 @@ export function useSaveProfile() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["currentUserProfile"] });
     },
+  });
+}
+
+export function useStartInspection() {
+  const { actor } = useActor();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      trailerId,
+      photoHashes,
+      comments,
+    }: { trailerId: bigint; photoHashes: string[]; comments: string }) => {
+      if (!actor) throw new Error("No actor");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (actor as any).startInspection(trailerId, photoHashes, comments);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["allActivityLogs"] });
+      qc.invalidateQueries({ queryKey: ["allInspections"] });
+      qc.invalidateQueries({ queryKey: ["inspections"] });
+    },
+  });
+}
+
+export function useCloseInspection() {
+  const { actor } = useActor();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      inspectionId,
+      trailerCode,
+    }: { inspectionId: bigint; trailerCode: string }) => {
+      if (!actor) throw new Error("No actor");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (actor as any).closeInspection(inspectionId, trailerCode);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["allActivityLogs"] });
+      qc.invalidateQueries({ queryKey: ["allInspections"] });
+      qc.invalidateQueries({ queryKey: ["inspections"] });
+    },
+  });
+}
+
+export function useGetInspections(trailerId: bigint | undefined) {
+  const { actor, isFetching } = useActor();
+  return useQuery<unknown[]>({
+    queryKey: ["inspections", trailerId?.toString()],
+    queryFn: async () => {
+      if (!actor || trailerId === undefined) return [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (actor as any).getInspections(trailerId) as Promise<unknown[]>;
+    },
+    enabled: !!actor && !isFetching && trailerId !== undefined,
+  });
+}
+
+export function useGetAllInspections() {
+  const { actor, isFetching } = useActor();
+  return useQuery<unknown[]>({
+    queryKey: ["allInspections"],
+    queryFn: async () => {
+      if (!actor) return [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (actor as any).getAllInspections() as Promise<unknown[]>;
+    },
+    enabled: !!actor && !isFetching,
   });
 }
